@@ -2,6 +2,42 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.5.2 - 2024-09-29
+
+### Added
+*   Added 15 second sleep to systemd services to allow d-bus daemon to start and be available if present
+
+### Fixed
+*   Fix Bug: Application crash unable to correctly process a timestamp that has fractional seconds
+*   Fix Bug: Fixed application logging output of Personal Shared Folder incorrectly advising there is no free space
+
+### Updated
+*   Updated documentation
+
+## 2.5.1 - 2024-09-27
+
+### Special Thankyou
+A special thankyou to @phlibi for assistance with diagnosing and troubleshooting the database timestamp issue
+
+### Added
+*   Implement Feature Request: Don't print the d-bus WARNING if disable_notifications is set on cmd line or in config
+
+### Changed
+*   Add --enable-debug to Docker files when building client application to allow for better diagnostics when issues occur
+*   Update Debian Dockerfile to use 'curl' from backports so a more modern curl version is used
+
+### Fixed
+*   Fix Regression: Fix regression of extra quotation marks when using ONEDRIVE_SINGLE_DIRECTORY with Docker
+*   Fix Regression: Fix regression that real-time synchronization is not occurring when using --monitor and sync_list
+*   Fix Regression: Fix regression that --remove-source-files doesn’t work
+*   Fix Bug: Application crash when run synchronize due to negative free space online
+*   Fix Bug: Application crash when performing a URL dedocde
+*   Fix Bug: Application crash when using sync_list and Personal Shared Folders the root folder fails to present the item id
+*   Fix Bug: Application crash when attempting to read timestamp from database as invalid data was written
+
+### Updated
+*   Updated documentation (various)
+
 ## 2.5.0 - 2024-09-16
 
 ### Special Thankyou
@@ -591,7 +627,7 @@ A special thankyou to all those who helped with testing and providing feedback d
 *   Fixed how the application handles 429 response codes from OneDrive (critical update)
 *   Fixed building on Alpine Linux under Docker
 *   Fixed how the 'username' is determined from the running process for logfile naming
-*   Fixed file handling when a failed download has occured due to exiting via CTRL-C
+*   Fixed file handling when a failed download has occurred due to exiting via CTRL-C
 *   Fixed an unhandled exception when OneDrive throws an error response on initialising
 *   Fixed the handling of moving files into a skipped .folder when skip_dotfiles = true
 *   Fixed the regex parsing of response URI to avoid potentially generating a bad request to OneDrive, leading to a 'AADSTS9002313: Invalid request. Request is malformed or invalid.' response.

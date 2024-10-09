@@ -54,17 +54,17 @@ struct Database {
 
 	// Dump open statements
 	void dump_open_statements() {
-		addLogEntry("Dumping open SQL statements:", ["debug"]);
+		if (debugLogging) {addLogEntry("Dumping open SQL statements:", ["debug"]);}
 		auto p = sqlite3_next_stmt(pDb, null);
 		while (p != null) {
-			addLogEntry(" Still Open: " ~ to!string(ifromStringz(sqlite3_sql(p))), ["debug"]);
+			if (debugLogging) {addLogEntry(" Still Open: " ~ to!string(ifromStringz(sqlite3_sql(p))), ["debug"]);}
 			p = sqlite3_next_stmt(pDb, p);
 		}
 	}
 	
 	// Close open statements
 	void close_open_statements() {
-		addLogEntry("Closing open SQL statements:", ["debug"]);
+		if (debugLogging) {addLogEntry("Closing open SQL statements:", ["debug"]);}
 		auto p = sqlite3_next_stmt(pDb, null);
 		while (p != null) {
 			// The sqlite3_finalize() function is called to delete a prepared statement
@@ -76,7 +76,7 @@ struct Database {
 	
 	// Count open statements
 	int count_open_statements() {
-		addLogEntry("Counting open SQL statements", ["debug"]);
+		if (debugLogging) {addLogEntry("Counting open SQL statements", ["debug"]);}
 		int openStatementCount = 0;
 		auto p = sqlite3_next_stmt(pDb, null);
 		while (p != null) {
@@ -97,7 +97,13 @@ struct Database {
 	// Open the database file
 	void open(const(char)[] filename) {
 		// https://www.sqlite.org/c3ref/open.html
-		int rc = sqlite3_open(toStringz(filename), &pDb);
+		// Safest multithreaded way to open the database
+		int rc = sqlite3_open_v2(
+			toStringz(filename), /* Database filename (UTF-8) */
+			&pDb,                /* OUT: SQLite db handle */
+			SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,  /* Flags */
+			null                 /* Optional: Name of the VFS module to use */
+		);
 		
 		if (rc != SQLITE_OK) {
 			string errorMsg;
