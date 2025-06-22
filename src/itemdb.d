@@ -232,6 +232,7 @@ final class ItemDatabase {
 	Database db;
 	string insertItemStmt;
 	string updateItemStmt;
+	string deleteOrphanItemStmt;
 	string selectItemByIdStmt;
 	string selectItemByRemoteIdStmt;
 	string selectItemByRemoteDriveIdStmt;
@@ -316,6 +317,8 @@ final class ItemDatabase {
 			// Set the journal mode for databases associated with the current connection
 			// https://www.sqlite.org/pragma.html#pragma_journal_mode
 			db.exec("PRAGMA journal_mode = WAL;");
+			// Only checkpoint if WAL grows past a certain size
+			db.exec("PRAGMA wal_autocheckpoint = 1000;");
 			// Automatic indexing is enabled by default as of version 3.7.17
 			// https://www.sqlite.org/pragma.html#pragma_automatic_index 
 			// PRAGMA automatic_index = boolean;
@@ -347,6 +350,10 @@ final class ItemDatabase {
 			UPDATE item
 			SET name = ?3, remoteName = ?4, type = ?5, eTag = ?6, cTag = ?7, mtime = ?8, parentId = ?9, quickXorHash = ?10, sha256Hash = ?11, remoteDriveId = ?12, remoteParentId = ?13, remoteId = ?14, remoteType = ?15, syncStatus = ?16, size = ?17, relocDriveId = ?18, relocParentId = ?19
 			WHERE driveId = ?1 AND id = ?2
+		";
+		deleteOrphanItemStmt = "
+			DELETE FROM item
+			WHERE driveId = ?1 AND parentId = ?9 AND name = ?3
 		";
 		selectItemByIdStmt = "
 			SELECT *
@@ -501,25 +508,70 @@ final class ItemDatabase {
 	void upsert(const ref Item item) {
 		synchronized(databaseLock) {
 			Statement selectStmt = db.prepare("SELECT COUNT(*) FROM item WHERE driveId = ? AND id = ?");
+			Statement selectParentalStmt = db.prepare("SELECT COUNT(*) FROM item WHERE driveId = ? AND parentId = ? AND name = ?");
 			Statement executionStmt = Statement.init;  // Initialise executionStmt to avoid uninitialised variable usage
 			
 			scope(exit) {
 				selectStmt.finalise();
+				selectParentalStmt.finalise();
 				executionStmt.finalise();
 			}
 			
 			try {
+				if (debugLogging) {
+					addLogEntry("Attempting upsert for item: id='" ~ item.id ~ "', parentId='" ~ item.parentId ~ "', name='" ~ item.name ~ "'", ["debug"]);
+				}
+				
 				selectStmt.bind(1, item.driveId);
 				selectStmt.bind(2, item.id);
 				auto result = selectStmt.exec();
 				size_t count = result.front[0].to!size_t;
 				
+				// If the existing 'driveId' and 'id' are in the DB, then this is a record to update
 				if (count == 0) {
-					executionStmt = db.prepare(insertItemStmt);
+					// Item with id not found, check for orphaned entry by parentId and name
+					// - If the user has deleted and recreated the folder online with the same name, whilst we may have an existing entry, this will have the old 'id'
+					selectParentalStmt.bind(1, item.driveId);
+					selectParentalStmt.bind(2, item.parentId);
+					selectParentalStmt.bind(3, item.name);
+					auto orphanResult = selectParentalStmt.exec();
+					size_t orphanCount = orphanResult.front[0].to!size_t;
+
+					// Were orphans found?
+					if (orphanCount == 0) {
+						// No match on name+parentId either — new insert
+						if (debugLogging) {
+							addLogEntry("Inserting new item: id='" ~ item.id ~ "', parentId='" ~ item.parentId ~ "', name='" ~ item.name ~ "'", ["debug"]);
+						}
+						executionStmt = db.prepare(insertItemStmt);
+					} else {
+						// Orphans found
+						if (debugLogging) {
+							addLogEntry("Orphan lookup: count=" ~ to!string(orphanCount) ~ " for driveId='" ~ item.driveId ~ "', parentId='" ~ item.parentId ~ "', name='" ~ item.name ~ "'", ["debug"]);
+							addLogEntry("Orphaned DB Entry - deleting old entry for name='" ~ item.name ~ "' and parentId='" ~ item.parentId ~ "'", ["debug"]);
+						}
+					
+						// Orphan exists, delete it first
+						auto deleteOrphan = db.prepare(deleteOrphanItemStmt);
+						deleteOrphan.bind(1, item.driveId);
+						deleteOrphan.bind(2, item.parentId);
+						deleteOrphan.bind(3, item.name);
+						deleteOrphan.exec();
+						deleteOrphan.finalise();
+
+						if (debugLogging) {
+							addLogEntry("Deleted orphaned entry — now inserting new item: id='" ~ item.id ~ "', parentId='" ~ item.parentId ~ "', name='" ~ item.name ~ "'", ["debug"]);
+						}
+						executionStmt = db.prepare(insertItemStmt);
+					}
 				} else {
+					// Found by ID — perform update
+					if (debugLogging) {
+						addLogEntry("Updating existing DB record: id='" ~ item.id ~ "', parentId='" ~ item.parentId ~ "', name='" ~ item.name ~ "'", ["debug"]);
+					}
 					executionStmt = db.prepare(updateItemStmt);
 				}
-			
+
 				bindItem(item, executionStmt);
 				executionStmt.exec();
 			} catch (SqliteException exception) {
@@ -1164,8 +1216,8 @@ final class ItemDatabase {
 					}
 				}
 				
-				// Ensure there are no pending operations by performing a checkpoint
-				db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+				// Ensure there are no pending operations by performing a PASSIVE checkpoint
+				db.exec("PRAGMA wal_checkpoint(PASSIVE);");
 				
 				// Prepare and execute VACUUM statement
 				Statement stmt = db.prepare("VACUUM;");

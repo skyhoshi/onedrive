@@ -427,33 +427,30 @@ int main(string[] cliArgs) {
 	// If this has been requested, we need to ensure that all actions are performed against the dry-run database copy, and, 
 	// no actual action takes place - such as deleting files if deleted online, moving files if moved online or local, downloading new & changed files, uploading new & changed files
 	if (dryRun || (noSyncTaskOperationRequested)) {
+		// Cleanup any existing dry-run elements ... these should never be left hanging around and should be cleaned up first
+		cleanupDatabaseFiles(appConfig.databaseFilePathDryRun);
+		
 		// If --dry-run
 		if (dryRun) {
 			// This is a --dry-run operation
 			addLogEntry("DRY-RUN Configured. Output below shows what 'would' have occurred.");
-		} 
-		
-		// Cleanup any existing dry-run elements ... these should never be left hanging around and should be cleaned up first
-		cleanupDatabaseFiles(appConfig.databaseFilePathDryRun);
-		
-		// Make a copy of the original items.sqlite3 for use as the dry run copy if it exists
-		if (exists(appConfig.databaseFilePath)) {
-			// In a --dry-run --resync scenario, we should not copy the existing database file
-			if (!appConfig.getValueBool("resync")) {
-				// Copy the existing DB file to the dry-run copy
-				if (dryRun) {
+		 
+			// Make a copy of the original items.sqlite3 for use as the dry run copy if it exists
+			if (exists(appConfig.databaseFilePath)) {
+				// In a --dry-run --resync scenario, we should not copy the existing database file
+				if (!appConfig.getValueBool("resync")) {
+					// Copy the existing DB file to the dry-run copy
 					addLogEntry("DRY-RUN: Copying items.sqlite3 to items-dryrun.sqlite3 to use for dry run operations");
-				}
-				copy(appConfig.databaseFilePath,appConfig.databaseFilePathDryRun);
-			} else {
-				// No database copy due to --resync
-				if (dryRun) {
+					copy(appConfig.databaseFilePath,appConfig.databaseFilePathDryRun);
+				} else {
+					// No database copy due to --resync - an empty DB file will be used for the resync operation
 					addLogEntry("DRY-RUN: No database copy created for --dry-run due to --resync also being used");
 				}
 			}
+			
+			// update runtimeDatabaseFile now that we are using the dry run path
+			runtimeDatabaseFile = appConfig.databaseFilePathDryRun;
 		}
-		// update runtimeDatabaseFile now that we are using the dry run path
-		runtimeDatabaseFile = appConfig.databaseFilePathDryRun;
 	} else {
 		// Cleanup any existing dry-run elements ... these should never be left hanging around
 		cleanupDatabaseFiles(appConfig.databaseFilePathDryRun);
@@ -1180,7 +1177,7 @@ int main(string[] cliArgs) {
 						
 						// Write WAL and SHM data to file for this loop and release memory used by in-memory processing
 						if (debugLogging) {addLogEntry("Merge contents of WAL and SHM files into main database file", ["debug"]);}
-						itemDB.performCheckpoint("TRUNCATE");
+						itemDB.performCheckpoint("PASSIVE");
 					} else {
 						// Not online
 						addLogEntry("Microsoft OneDrive service is not reachable at this time. Will re-try on next sync attempt.");
@@ -1325,18 +1322,14 @@ void setDefaultApplicationThreads() {
 	int configuredThreads = to!int(appConfig.getValueLong("threads"));
 	int systemCPUs = totalCPUs;
 	
-	// Safety cap: never use more threads than logical cores
-	int threadsToUse = min(configuredThreads, systemCPUs);
-	
-	// Optional warning if config is too high
+	// Warning if configuredThreads is too high
 	if (configuredThreads > systemCPUs) {
-		addLogEntry("WARNING: Configured 'threads = " ~ to!string(configuredThreads) ~ "' exceeds available CPU cores (" ~ to!string(systemCPUs) ~ "). Capping to 'threads' to " ~ to!string(systemCPUs) ~ ".");
-		// Update config option
-		appConfig.setValueLong("threads", to!long(systemCPUs));
+		addLogEntry("WARNING: Configured 'threads = " ~ to!string(configuredThreads) ~ "' exceeds available CPU cores (" ~ to!string(systemCPUs) ~ ").");
+		addLogEntry("         This may lead to reduced performance, CPU contention, and instability. For best results, set 'threads' no higher than the number of physical CPU cores.");
 	}
 	
-	// Set the default threads
-	defaultPoolThreads(threadsToUse);
+	// Set the default threads based on configured option
+	defaultPoolThreads(configuredThreads);
 }
 
 // Retrieves the maximum number of open files allowed by the system

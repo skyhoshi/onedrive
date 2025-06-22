@@ -95,8 +95,10 @@ class SyncEngine {
 	// Array of directory databaseItem.id to skip while applying the changes.
 	// These are the 'parent path' id's that are being excluded, so if the parent id is in here, the child needs to be skipped as well
 	RedBlackTree!string skippedItems = redBlackTree!string();
-	// Array of databaseItem.id to delete after the changes have been downloaded
-	string[2][] idsToDelete;
+	
+	// Array consisting of 'item.driveId', 'item.id' and 'item.parentId' values to delete after all the online changes have been downloaded
+	string[3][] idsToDelete;
+	
 	// Array of JSON items which are files or directories that are not 'root', skipped or to be deleted, that need to be processed
 	JSONValue[] jsonItemsToProcess;
 	// Array of JSON items which are files that are not 'root', skipped or to be deleted, that need to be downloaded
@@ -1928,7 +1930,8 @@ class SyncEngine {
 				if (isItemSynced(existingDatabaseItem, localPathToDelete, itemSource)) {
 					// Flag to delete
 					if (debugLogging) {addLogEntry("Flagging to delete item locally: " ~ to!string(onedriveJSONItem), ["debug"]);}
-					idsToDelete ~= [thisItemDriveId, thisItemId];
+					// Use the DB entries returned - add the driveId, itemId and parentId values  to the array
+					idsToDelete ~= [existingDatabaseItem.driveId, existingDatabaseItem.id, existingDatabaseItem.parentId];
 				} else {
 					// If local data protection is configured (bypassDataPreservation = false), safeBackup the local file, passing in if we are performing a --dry-run or not
 					// In case the renamed path is needed
@@ -2194,7 +2197,8 @@ class SyncEngine {
 							}
 							// flag to delete local file as it now is no longer in sync with OneDrive
 							if (debugLogging) {addLogEntry("Flagging to delete item locally: ", ["debug"]);}
-							idsToDelete ~= [thisItemDriveId, thisItemId];
+							// Use the configured values - add the driveId, itemId and parentId values to the array
+							idsToDelete ~= [thisItemDriveId, thisItemId, thisItemParentId];
 						}
 					}	
 				}
@@ -2410,7 +2414,8 @@ class SyncEngine {
 							if (existingDBEntry) {
 								// flag to delete
 								if (verboseLogging) {addLogEntry("Flagging item for local delete as item exists in database: " ~ newItemPath, ["verbose"]);}
-								idsToDelete ~= [thisItemDriveId, thisItemId];
+								// Use the configured values - add the driveId, itemId and parentId values to the array
+								idsToDelete ~= [thisItemDriveId, thisItemId, thisItemParentId];
 							}
 						}
 					}
@@ -3217,10 +3222,10 @@ class SyncEngine {
 		if (appConfig.accountType == "personal") {
 			// Yes this is a personal account
 			if (debugLogging) {
-				addLogEntry("Updating Shared Folder DB Tie record entry with correct values as this is a 'root' object as it is a Personal Shared Folder Root Object" , ["debug"]);
-				addLogEntry(" sharedFolderDatabaseTie.type = ItemType.root", ["debug"]);
+				addLogEntry("Updating Shared Folder DB Tie record entry with correct type value as this as it is a Personal Shared Folder Object" , ["debug"]);
+				addLogEntry(" sharedFolderDatabaseTie.type = ItemType.dir", ["debug"]);
 			}
-			sharedFolderDatabaseTie.type = ItemType.root;
+			sharedFolderDatabaseTie.type = ItemType.dir;
 		}
 		
 		// Issue #3115 - Validate sharedFolderDatabaseTie.driveId length
@@ -4413,7 +4418,7 @@ class SyncEngine {
 						if (pathItem.id == item.id) {
 							needsRemoval = true;
 						} else {
-							addLogEntry("Skipped due to id difference!");
+							addLogEntry("Skipping local path removal due to 'id' difference!");
 						}
 					} else {
 						// item has disappeared completely
@@ -4487,6 +4492,7 @@ class SyncEngine {
 					pathFakeDeletedArray ~= pathToAdd;
 				}
 				
+				// Local path removal
 				bool needsRemoval = false;
 				if (exists(path)) {
 					// path exists on the local system	
@@ -4496,7 +4502,7 @@ class SyncEngine {
 						if (pathItem.id == item.id) {
 							needsRemoval = true;
 						} else {
-							addLogEntry("Skipped due to id difference!");
+							addLogEntry("Skipping local path removal due to 'id' difference!");
 						}
 					} else {
 						// item has disappeared completely
@@ -4841,7 +4847,9 @@ class SyncEngine {
 							addLogEntry("Flagging to delete local item as it now is no longer in sync with OneDrive", ["debug"]);
 							addLogEntry("outOfSyncItem: " ~ to!string(outOfSyncItem), ["debug"]);
 						}
-						idsToDelete ~= [outOfSyncItem.driveId, outOfSyncItem.id];
+						
+						// Use the configured values - add the driveId, itemId and parentId values to the array
+						idsToDelete ~= [outOfSyncItem.driveId, outOfSyncItem.id, outOfSyncItem.parentId];
 						// delete items in idsToDelete
 						if (idsToDelete.length > 0) processDeleteItems();
 					}
@@ -5517,7 +5525,11 @@ class SyncEngine {
 			logKey = generateAlphanumericString();
 			displayFunctionProcessingStart(thisFunctionName, logKey);
 		}
-			
+		
+		// Debug what JSON we are evaluating against Client Side Filtering Rules
+		if (debugLogging) {addLogEntry("Checking this JSON against Client Side Filtering Rules: " ~ sanitiseJSONItem(onedriveJSONItem), ["debug"]);}
+				
+		// Function flag
 		bool clientSideRuleExcludesPath = false;
 		
 		// Check the path against client side filtering rules
@@ -5775,6 +5787,9 @@ class SyncEngine {
 							selfBuiltPath = splitPaths[1];
 						}
 						
+						// Debug output what the self-built path currently is
+						if (debugLogging) {addLogEntry(" - selfBuiltPath currently calculated as: " ~ selfBuiltPath, ["debug"]);}
+						
 						// Issue #2731
 						// Get the remoteDriveId from JSON record
 						string remoteDriveId = onedriveJSONItem["parentReference"]["driveId"].str;
@@ -5787,9 +5802,20 @@ class SyncEngine {
 							itemDB.selectByRemoteDriveId(remoteDriveId, remoteItem);
 							if (debugLogging) {addLogEntry("Query returned result (itemDB.selectByRemoteDriveId): " ~ to!string(remoteItem), ["debug"]);}
 							
+							// Shared Folders present a unique challenge to determine what path needs to be used, especially in a --resync scenario where there are near zero records available to use computeItemPath() 
 							// Update the path that will be used to check 'sync_list' with the 'name' of the remoteDriveId database record
-							selfBuiltPath = remoteItem.name ~ selfBuiltPath;
-							if (debugLogging) {addLogEntry("selfBuiltPath after 'Shared Folder' DB details update = " ~ to!string(selfBuiltPath), ["debug"]);}
+							// Issue #3331
+							// Avoid duplicating the shared folder root name if already present
+							if (!selfBuiltPath.startsWith("/" ~ remoteItem.name ~ "/")) {
+								selfBuiltPath = remoteItem.name ~ selfBuiltPath;
+								if (debugLogging) {
+									addLogEntry("selfBuiltPath after 'Shared Folder' DB details update = " ~ to!string(selfBuiltPath), ["debug"]);
+								}
+							} else {
+								if (debugLogging) {
+									addLogEntry("Shared Folder name already present in path; no update needed to selfBuiltPath", ["debug"]);
+								}
+							}
 						}
 						
 						// Issue #2740
@@ -6423,12 +6449,16 @@ class SyncEngine {
 						//   The local item has the same hash value as the item online - correcting timestamp online
 						// This then creates another version online which we do not want to do .. unless configured to do so
 						if (!appConfig.getValueBool("create_new_file_version")) {
-							// Create an applicable DB item from the upload JSON response
-							Item onlineItem;
-							onlineItem = makeItem(uploadResponse);
-							// Correct the local file timestamp to avoid creating a new version online
-							// Set the timestamp, logging and error handling done within function
-							setLocalPathTimestamp(dryRun, localFilePath, onlineItem.mtime);
+							// Are we in an --upload-only scenario?
+							// In in an --upload-only scenario, it is pointless updating the local timestamp with that what is now online
+							if(!uploadOnly){
+								// Create an applicable DB item from the upload JSON response
+								Item onlineItem;
+								onlineItem = makeItem(uploadResponse);
+								// Correct the local file timestamp to avoid creating a new version online
+								// Set the local timestamp, logging and error handling done within function
+								setLocalPathTimestamp(dryRun, localFilePath, onlineItem.mtime);
+							}	
 						} else {
 							// Create a new online version of the file by updating the metadata, which negates the need to download the file
 							uploadLastModifiedTime(dbItem, targetDriveId, targetItemId, localModifiedTime, etagFromUploadResponse);	
@@ -6446,7 +6476,7 @@ class SyncEngine {
 					if (!uploadIntegrityPassed) {
 						// upload integrity check failed for the modified file
 						if (!appConfig.getValueBool("create_new_file_version")) {
-							// are we in an --upload-only scenario
+							// Are we in an --upload-only scenario?
 							if(!uploadOnly){
 								// Download the now online modified file
 								addLogEntry("WARNING: Microsoft OneDrive modified your uploaded file via its SharePoint 'enrichment' feature. To keep your local and online versions consistent, the altered file will now be downloaded.");
@@ -6470,12 +6500,16 @@ class SyncEngine {
 						//   The local item has the same hash value as the item online - correcting timestamp online
 						// This then creates another version online which we do not want to do .. unless configured to do so
 						if (!appConfig.getValueBool("create_new_file_version")) {
-							// Create an applicable DB item from the upload JSON response
-							Item onlineItem;
-							onlineItem = makeItem(uploadResponse);
-							// Correct the local file timestamp to avoid creating a new version online
-							// Set the timestamp, logging and error handling done within function
-							setLocalPathTimestamp(dryRun, localFilePath, onlineItem.mtime);
+							// Are we in an --upload-only scenario?
+							// In in an --upload-only scenario, it is pointless updating the local timestamp with that what is now online
+							if(!uploadOnly){
+								// Create an applicable DB item from the upload JSON response
+								Item onlineItem;
+								onlineItem = makeItem(uploadResponse);
+								// Correct the local file timestamp to avoid creating a new version online
+								// Set the timestamp, logging and error handling done within function
+								setLocalPathTimestamp(dryRun, localFilePath, onlineItem.mtime);
+							}
 						} else {
 							// Create a new online version of the file by updating the metadata, which negates the need to download the file
 							uploadLastModifiedTime(dbItem, targetDriveId, targetItemId, localModifiedTime, etagFromUploadResponse);	
@@ -7110,9 +7144,16 @@ class SyncEngine {
 		}
 		
 		// Now that all the paths have been rationalised and potential duplicate creation requests filtered out, create the paths online
+		if (debugLogging) {addLogEntry("uniquePathsToCreateOnline = " ~ to!string(uniquePathsToCreateOnline), ["debug"]);}
+		
+		// For each path in the array, attempt to create this online
 		foreach (onlinePathToCreate; uniquePathsToCreateOnline) {
-			// Create the path online
-			createDirectoryOnline(onlinePathToCreate);
+			try {
+				// Try and create the required path online
+				createDirectoryOnline(onlinePathToCreate);
+			} catch (Exception e) {
+				addLogEntry("ERROR: Failed to create directory online: " ~ onlinePathToCreate ~ " => " ~ e.msg);
+			}
 		}
 		
 		// Display function processing time if configured to do so
@@ -7916,6 +7957,8 @@ class SyncEngine {
 				if (verboseLogging) {addLogEntry("The requested directory to create was not found on OneDrive - creating remote directory: " ~ thisNewPathToCreate, ["verbose"]);}
 				
 				// Build up the online create directory request
+				string requiredDriveId;
+				string requiredParentItemId;
 				JSONValue createDirectoryOnlineAPIResponse;
 				JSONValue newDriveItem = [
 						"name": JSONValue(baseName(thisNewPathToCreate)),
@@ -7927,9 +7970,6 @@ class SyncEngine {
 				if (!dryRun) {
 					try {
 						// Attempt to create a new folder on the required driveId and parent item id
-						string requiredDriveId;
-						string requiredParentItemId;
-						
 						// Is the item a Remote Object (Shared Folder) ?
 						if (parentItem.type == ItemType.remote) {
 							// Yes .. Shared Folder
@@ -7957,9 +7997,16 @@ class SyncEngine {
 						addLogEntry("Successfully created the remote directory " ~ thisNewPathToCreate ~ " on Microsoft OneDrive");
 					} catch (OneDriveException exception) {
 						if (exception.httpStatusCode == 409) {
-							// OneDrive API returned a 404 (above) to say the directory did not exist
-							// but when we attempted to create it, OneDrive responded that it now already exists
+							// OneDrive API returned a 404 (far above) to say the directory did not exist
+							// but when we attempted to create it, OneDrive responded that it now already exists with a 409
 							if (verboseLogging) {addLogEntry("OneDrive reported that " ~ thisNewPathToCreate ~ " already exists .. OneDrive API race condition", ["verbose"]);}
+							
+							// Try to recover race condition by querying the parent's children for the folder we are trying to create
+							createDirectoryOnlineAPIResponse = resolveOnlineCreationRaceCondition(requiredDriveId, requiredParentItemId, thisNewPathToCreate);
+							
+							// Is the response a valid JSON object - validation checking done in saveItem
+							saveItem(createDirectoryOnlineAPIResponse);
+							
 							// Shutdown this API instance, as we will create API instances as required, when required
 							createDirectoryOnlineOneDriveApiInstance.releaseCurlEngine();
 							// Free object and memory
@@ -8179,6 +8226,114 @@ class SyncEngine {
 			// generic error
 			return;
 		}
+	}
+	
+	// In the event that the online creation triggered a 404 then a 409 on creation attempt, this function explicitly is used to query that parent for the child being sought
+	// This should return a usable JSON response of the folder being sought
+	JSONValue resolveOnlineCreationRaceCondition(string requiredDriveId, string requiredParentItemId, string thisNewPathToCreate) {
+		// Function Start Time
+		SysTime functionStartTime;
+		string logKey;
+		string thisFunctionName = format("%s.%s", strip(__MODULE__) , strip(getFunctionName!({})));
+		// Only set this if we are generating performance processing times
+		if (appConfig.getValueBool("display_processing_time") && debugLogging) {
+			functionStartTime = Clock.currTime();
+			logKey = generateAlphanumericString();
+			displayFunctionProcessingStart(thisFunctionName, logKey);
+		}
+	
+		// Create a new API Instance for this thread and initialise it
+		OneDriveApi raceConditionResolutionOneDriveApiInstance;
+		raceConditionResolutionOneDriveApiInstance = new OneDriveApi(appConfig);
+		raceConditionResolutionOneDriveApiInstance.initialise();
+		
+		// What is the folder we are seeking
+		string searchFolder = baseName(thisNewPathToCreate);
+		
+		// Where should we store the details of the online folder we are seeking?
+		JSONValue targetOnlineFolderDetails;
+		
+		// Required variables for listChildren to operate
+		JSONValue topLevelChildren;
+		string nextLink;
+		bool directoryFoundOnline = false;
+		
+		// To handle ^c events, we need this Code
+		while (true) {
+			// Check if exitHandlerTriggered is true
+			if (exitHandlerTriggered) {
+				// break out of the 'while (true)' loop
+				break;
+			}
+			
+			// Query this remote object for its children
+			topLevelChildren = raceConditionResolutionOneDriveApiInstance.listChildren(requiredDriveId, requiredParentItemId, nextLink);
+			
+			// Process each child that has been returned
+			foreach (child; topLevelChildren["value"].array) {
+				// We are specifically seeking a 'folder' object
+				if (isItemFolder(child)) {
+					// Is this the child folder we are looking for, and is a POSIX match?
+					// We know that Microsoft OneDrive is not POSIX aware, thus there cannot be 2 folders of the same name with different case sensitivity
+					if (child["name"].str == searchFolder) {
+						// EXACT MATCH including case sensitivity: Flag that we found the folder online
+						directoryFoundOnline = true;
+						// Use these details for raceCondition response
+						targetOnlineFolderDetails = child;
+						break;
+					} else {
+						string childAsLower = toLower(child["name"].str);
+						string thisFolderNameAsLower = toLower(searchFolder);
+						
+						try {
+							if (childAsLower == thisFolderNameAsLower) {	
+								// This is a POSIX 'case in-sensitive match' ..... 
+								// Local item name has a 'case-insensitive match' to an existing item on OneDrive
+								throw new PosixException(searchFolder, child["name"].str);
+							}
+						} catch (PosixException e) {
+							// Display POSIX error message
+							displayPosixErrorMessage(e.msg);
+							addLogEntry("ERROR: Requested directory to search for and potentially create has a 'case-insensitive match' to an existing directory on Microsoft OneDrive online.");
+							addLogEntry("ERROR: To resolve, rename this local directory: " ~ thisNewPathToCreate);
+						}
+					}
+				}
+			}
+			
+			// That set of returned objects - did we find the folder?
+			if (directoryFoundOnline) {
+				// We found the folder, no need to continue searching nextLink data
+				break;
+			}
+			
+			// If a collection exceeds the default page size (200 items), the @odata.nextLink property is returned in the response 
+			// to indicate more items are available and provide the request URL for the next page of items.
+			if ("@odata.nextLink" in topLevelChildren) {
+				// Update nextLink to next changeSet bundle
+				if (debugLogging) {addLogEntry("Setting nextLink to (@odata.nextLink): " ~ nextLink, ["debug"]);}
+				nextLink = topLevelChildren["@odata.nextLink"].str;
+			} else break;
+			
+			// Sleep for a while to avoid busy-waiting
+			Thread.sleep(dur!"msecs"(100)); // Adjust the sleep duration as needed
+		}
+		
+		// Shutdown this API instance, as we will create API instances as required, when required
+		raceConditionResolutionOneDriveApiInstance.releaseCurlEngine();
+		// Free object and memory
+		raceConditionResolutionOneDriveApiInstance = null;
+		// Perform Garbage Collection
+		GC.collect();
+		
+		// Display function processing time if configured to do so
+		if (appConfig.getValueBool("display_processing_time") && debugLogging) {
+			// Combine module name & running Function
+			displayFunctionProcessingTime(thisFunctionName, functionStartTime, Clock.currTime(), logKey);
+		}
+		
+		// Return the JSON with the folder details
+		return targetOnlineFolderDetails;
 	}
 	
 	// Test that the online name actually matches the requested local name
@@ -10328,7 +10483,7 @@ class SyncEngine {
 					//   /Level 1/Level 2/Level 3/Child Shared Folder/some folder/another folder
 					// But 'Child Shared Folder' is what is shared, thus '/Level 1/Level 2/Level 3/' is a potential information leak if logged.
 					// Plus, the application output now shows accurately what is being shared - so that is a good thing.
-					if (verboseLogging) {addLogEntry("Adding " ~ to!string(count(thisLevelChildren["value"].array)) ~ " OneDrive items for processing from " ~ pathForLogging, ["verbose"]);}
+					if (verboseLogging) {addLogEntry("Adding " ~ to!string(count(thisLevelChildren["value"].array)) ~ " OneDrive JSON items for further processing from " ~ pathForLogging, ["verbose"]);}
 				}
 				foreach (child; thisLevelChildren["value"].array) {
 					// Check for any Client Side Filtering here ... we should skip querying the OneDrive API for 'folders' that we are going to just process and skip anyway.
