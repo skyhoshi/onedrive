@@ -966,7 +966,7 @@ _**CLI Option Use:**_ `--sync-root-files`
 > Although it's not mandatory, it's recommended that after enabling this option, you perform a `--resync`. This ensures that any previously excluded content is now included in your sync process.
 
 ### threads
-_**Description:**_ This configuration option controls the number of 'threads' for upload and download operations when files need to be transferred between your local system and Microsoft OneDrive.
+_**Description:**_ This configuration option controls the number of worker threads used for parallel upload and download operations when transferring files between your local system and Microsoft OneDrive. Each thread handles a discrete portion of the workload, improving performance when used appropriately.
 
 _**Value Type:**_ Integer
 
@@ -976,8 +976,28 @@ _**Maximum Value:**_ `16`
 
 _**Config Example:**_ `threads = "16"`
 
+> [!NOTE]
+> The default value of `8` threads is based on the average number of physical CPU cores found in consumer and workstation-grade Intel and AMD processors released from approximately 2012 through 2025. This includes laptops, desktops, and server-grade CPUs where 4–8 physical cores are typical.
+> 
+> In extensive testing, configuring the application with more than `16` threads — regardless of available physical CPU cores — frequently caused the Microsoft OneDrive service to become blocked due to excessive API request volume.
+
+> [!IMPORTANT]
+> For optimal performance and application stability, the number of threads should not exceed the number of **physical CPU cores** available to the system. Setting the thread count too high can result in **CPU contention**, increased **context switching**, and **reduced throughput** due to over-scheduling.  
+> If running inside a container or virtual machine, ensure that the container/VM has sufficient allocated CPU cores before increasing this setting.
+
 > [!WARNING]
-> Increasing the threads beyond the default will lead to increased system utilisation and local TCP port use, which may lead to unpredictable behaviour and/or may lead application stability issues.
+> Increasing the thread count beyond the default or available physical CPU cores will also result in higher **system resource utilisation**, particularly in terms of CPU load and local TCP port consumption. On lower-spec systems or in constrained environments, this may lead to **network saturation**, **unpredictable behaviour**, or **application crashes** due to resource exhaustion.
+
+> [!IMPORTANT]
+> If the configured `threads` value (default or manual) exceeds the number of available CPU cores, the application will issue a warning similar to the following:
+>  
+> ```
+> WARNING: Configured 'threads = 8' exceeds available CPU cores (CPU_COUNT).
+>          This may lead to reduced performance, CPU contention, and instability. For best results, set 'threads' no higher than the number of physical CPU cores.
+> ```
+>
+> If this warning message appears during application startup, you **must** review and adjust your threads setting to match the number of physical CPU cores on your system to avoid degraded performance or instability.
+
 
 ### transfer_order
 _**Description:**_ This configuration option controls the transfer order of files between your local system and Microsoft OneDrive.
